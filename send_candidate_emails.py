@@ -7,6 +7,7 @@ import re
 import shutil
 import smtplib
 import ssl
+import string
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -128,6 +129,19 @@ def read_template(path: Path) -> tuple[str, str]:
     body = "\n".join(lines[1:]).lstrip("\n")
     if not subject or not body.strip():
         raise ValueError("The template must contain a subject and a non-empty body")
+    for part in (subject, body):
+        try:
+            fields = {
+                field_name
+                for _, field_name, _, _ in string.Formatter().parse(part)
+                if field_name
+            }
+        except ValueError as error:
+            raise ValueError(f"Invalid template formatting: {error}") from error
+        unsupported = fields - {"candidate_name", "contact_no"}
+        if unsupported:
+            names = ", ".join(sorted(unsupported))
+            raise ValueError(f"Unsupported template placeholder(s): {names}")
     return subject, body
 
 
