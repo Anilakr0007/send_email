@@ -342,6 +342,7 @@ def main() -> int:
                 continue
             if email.lower() in sent_emails and not settings.resend_sent:
                 append_log(settings.log_file, log_values(**common, status="SKIPPED", error="Already recorded as SENT"))
+                sent_row_indexes.append(int(row_number))
                 print(f"Row {row_number + 2}: skipped {email} (already sent)")
                 continue
 
