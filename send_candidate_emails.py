@@ -100,6 +100,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Move the workbook to ARCHIVE_DIR after a run with no failures.",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum number of email attempts per run. Use 0 for no limit.",
+    )
     return parser.parse_args()
 
 
@@ -195,6 +201,24 @@ def append_log(log_file: Path, values: dict[str, str]) -> None:
         writer.writerow(values)
 
 
+def remove_sent_candidates(workbook: Path, row_indexes: list[int]) -> None:
+    if not row_indexes:
+        return
+    if workbook.suffix.lower() != ".xlsx":
+        raise ValueError("Removing sent candidates is supported only for .xlsx workbooks")
+
+    from openpyxl import load_workbook
+
+    excel_workbook = load_workbook(workbook)
+    try:
+        worksheet = excel_workbook.active
+        for row_index in sorted(set(row_indexes), reverse=True):
+            worksheet.delete_rows(row_index + 2)
+        excel_workbook.save(workbook)
+    finally:
+        excel_workbook.close()
+
+
 def render(value: str, candidate_name: str, contact_no: str) -> str:
     return value.format(candidate_name=candidate_name, contact_no=contact_no)
 
@@ -258,6 +282,8 @@ def log_values(
 
 def main() -> int:
     args = parse_args()
+    if args.limit < 0:
+        raise ValueError("--limit must be 0 or greater")
     settings = load_settings()
     dry_run = settings.dry_run or args.dry_run
     workbook = choose_workbook(settings.source_dir, args.file)
@@ -273,6 +299,9 @@ def main() -> int:
     smtp: smtplib.SMTP | None = None
     failures = 0
     sent_count = 0
+    attempted_count = 0
+    sent_row_indexes: list[int] = []
+    limit_reached = False
     try:
         if not dry_run:
             missing_settings = [
@@ -292,6 +321,11 @@ def main() -> int:
             smtp = open_smtp(settings)
 
         for row_number, row in candidates.iterrows():
+            if args.limit and attempted_count >= args.limit:
+                limit_reached = True
+                print(f"Batch limit reached: {args.limit} email attempts")
+                break
+
             candidate_name = str(row["candidate_name"]).strip()
             contact_no = str(row["contact_no"]).strip()
             email = str(row["email"]).strip()
@@ -319,6 +353,7 @@ def main() -> int:
                 render(body_template, candidate_name, contact_no),
                 settings.attachments,
             )
+            attempted_count += 1
             if dry_run:
                 print(f"Row {row_number + 2}: would send to {email}")
                 continue
@@ -328,6 +363,7 @@ def main() -> int:
                 append_log(settings.log_file, log_values(**common, status="SENT"))
                 sent_emails.add(email.lower())
                 sent_count += 1
+                sent_row_indexes.append(int(row_number))
                 print(f"Row {row_number + 2}: sent to {email}")
             except Exception as error:  # SMTP errors vary by provider.
                 append_log(settings.log_file, log_values(**common, status="FAILED", error=str(error)))
@@ -337,7 +373,15 @@ def main() -> int:
         if smtp is not None:
             smtp.quit()
 
-    if args.archive and not dry_run and failures == 0:
+    if sent_row_indexes and not dry_run:
+        try:
+            remove_sent_candidates(workbook, sent_row_indexes)
+            print(f"Removed sent candidates from source workbook: {len(sent_row_indexes)}")
+        except Exception as error:
+            failures += 1
+            print(f"Failed to remove sent candidates from {workbook}: {error}")
+
+    if args.archive and not dry_run and failures == 0 and not limit_reached:
         settings.archive_dir.mkdir(parents=True, exist_ok=True)
         destination = settings.archive_dir / workbook.name
         if destination.exists():
@@ -345,7 +389,10 @@ def main() -> int:
         shutil.move(str(workbook), destination)
         print(f"Archived workbook: {destination}")
 
-    print(f"Completed. Sent: {sent_count}; failures/invalid: {failures}")
+    print(
+        f"Completed. Sent: {sent_count}; attempts: {attempted_count}; "
+        f"failures/invalid: {failures}"
+    )
     return 1 if failures else 0
 
 

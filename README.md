@@ -26,6 +26,8 @@ This project reads candidate rows from an Excel file, sends a personalized email
    - `logs/email_log.csv`: send history.
    - `attachments/`: optional files to attach to every email. Set `ATTACHMENTS` in `.env` if needed.
 
+Each run attempts a maximum of 50 valid, unsent candidates by default. Candidates are removed from the source `.xlsx` workbook only after their email is sent successfully. Invalid, skipped, failed, and unprocessed candidates remain in the workbook. Sent candidates remain recorded in `logs/email_log.csv` with status `SENT`.
+
 ## Important email-provider setup
 
 - Gmail and Microsoft 365 commonly require an app password or approved SMTP authentication; a normal account password may not work.
@@ -61,6 +63,13 @@ Send emails:
 python send_candidate_emails.py
 ```
 
+The default batch is 50 email attempts. Choose a different batch size or process all candidates:
+
+```powershell
+python send_candidate_emails.py --limit 50
+python send_candidate_emails.py --limit 0
+```
+
 Use a specific workbook:
 
 ```powershell
@@ -72,6 +81,8 @@ Archive the workbook after a successful run:
 ```powershell
 python send_candidate_emails.py --archive
 ```
+
+The workbook is archived only when the run finishes all available candidates; a batch-limited run leaves the workbook in `source/` for the next batch. Row removal is supported for `.xlsx` workbooks. Use `--dry-run` first to verify the recipients without changing the workbook.
 
 ## Log details
 
